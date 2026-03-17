@@ -12,8 +12,6 @@
 
 #include "ws2tcpip.h"
 /*
-    getnameinfo() — reverse DNS lookup (IP → hostname)
-    NI_MAXHOST — constant for the max hostname buffer size
     NI_NAMEREQD — flag that tells getnameinfo to only return a hostname, not fall back to the IP
 */
 #include "windows.h"
@@ -53,8 +51,136 @@
 #include <ctime>
 #include <cstring>
 
+/*
+    uint8_t - unsigned 8-bit integer data type (used for raw packet data and MAC addresses)
+    uint16_t - unsigned 16-bit integer data type (used for protocol types and port numbers)
+    uint32_t - unsigned 32-bit integer data type (used for raw IP addresses and port numbers)
+    destination[6] - array to hold destination MAC address (6 bytes for MAC address)
+    source[6] - array to hold source MAC address (6 bytes for MAC address)
+    type - field to hold the Ethernet type (e.g., 0x0800 for IPv4)
+    #pragma pack(push, 1) - tells the compiler to save current pad settings and use 1-byte alignment (add no padding at all). Used to match exact layout of network packet headers
+    #pragma pack(pop) - restores previous packing settings
+    #pragma pack(push, 1)
+*/
+struct EthernetHeader
+{ 
+        uint8_t destination[6];
+        uint8_t source[6];
+        uint16_t type;
+};
+
+/*
+    version_ihl - version and internet header length (first 4 bits are IP version, last 4 bits are header length)
+    type_of_service - type of service (used for QoS and traffic prioritization)
+    total_length - total length of the IP packet (header + data)
+    identification - unique identifier for the packet (used for fragmentation)
+    flags_fragment_offset - flags and fragment offset (used for fragmentation)
+    time_to_live - time to live (limits the packet's lifetime in the network)
+    protocol - protocol type (e.g., TCP, UDP, ICMP)
+    header_checksum - checksum of the IP header (used for error checking)
+    source_ip - source IP address
+    destination_ip - destination IP address 
+    Note: The fields in the IP header are in network byte order, so they need to be converted to host byte order using ntohs() and ntohl() when processing the packet data
+*/
+struct IpHeader
+{
+        uint8_t version_ihl;
+        uint8_t type_of_service;
+        uint16_t total_length;
+        uint16_t identification;
+        uint16_t flags_fragment_offset;
+        uint8_t time_to_live;
+        uint8_t protocol;
+        uint16_t header_checksum;
+        uint32_t source_ip;
+        uint32_t destination_ip;
+};
+
+struct TcpHeader
+{
+        uint16_t source_port;
+        uint16_t destination_port;
+};
+
+struct UdpHeader
+{
+        uint16_t source_port;
+        uint16_t destination_port;
+};
+#pragma pack(pop)
+
+/*
+    u_char* user - pointer to unsigned char (used for raw packet data and parameters in the packet handler function)
+    const struct pcap_pkthdr* header - pointer to a struct containing packet metadata (length, timestamp)
+    const u_char* packet - pointer to the raw packet data
+    caplen - length of the captured portion of the packet
+*/
+void packet_handler(u_char* user, const struct pcap_pkthdr* header, const u_char* packet)
+{
+    //Ensures that the captured packet is large enough to contain both an Ethernet header and an IP header (prevents out of bounds memory access)
+    if(header->caplen < sizeof(EthernetHeader) + sizeof(IpHeader))
+    {   
+        return;
+    }
+    //Casts the raw packet bytes into an EthernetHeader struct so we can read its fields
+    const EthernetHeader* ethernet_header = reinterpret_cast<const EthernetHeader*>(packet); 
+    //ntohs() converts the Ethernet type field from network byte order to host byte order, allowing us to check if the packet is an IPv4 packet (Ethernet type 0x0800)   
+    if(ntohs(ethernet_header->type) != 0x0800)
+    {
+        return;
+    }
+    //Skips first 14 bytes of the packet (size of Ethernet header) to get to the IP header, and casts it to an IpHeader struct
+    const IpHeader* ip_header = reinterpret_cast<const IpHeader*>(packet + sizeof(EthernetHeader));
+
+    //Extracts source and destination IP addresses from the IP header and converts them to readable strings
+    std::string src_ip = ip_to_string(ip_header->source_ip); 
+    std::string dest_ip = ip_to_string(ip_header->destination_ip);
+
+    //Extracts the protocol number (TCP, UDP, etc) from the IP header
+    uint8_t protocol = ip_header->protocol; 
+
+    //Calculates the IP header length by masking the lower 4 bits of version_ihl and multiplying by 4 (converts 32-bit words to bytes)
+    uint8_t ip_header_length = (ip_header->version_ihl & 0x0F) * 4;
+
+    //Calculates a pointer to the start of the transport layer (TCP/UDP) header by skipping past the Ethernet and IP headers
+    const u_char* transport = packet + sizeof(EthernetHeader) + ip_header_length;
+    uint16_t src_port = 0;
+    uint16_t dst_port = 0;
+    if(protocol == IPPROTO_TCP)
+    {
+        //Ensures the packet is large enough to contain a TCP header
+        if(header->caplen < sizeof(EthernetHeader) + ip_header_length + sizeof(TcpHeader))
+        {
+            return;
+        }
+        //Casts the transport layer bytes into a TcpHeader struct so we can read the source and destination ports
+        const TcpHeader* tcp_header = reinterpret_cast<const TcpHeader*>(transport);
+        src_port = ntohs(tcp_header->source_port);
+        dst_port = ntohs(tcp_header->destination_port);
+    }
+    else if(protocol == IPPROTO_UDP)
+    {   
+        //Ensures the packet is large enough to contain a UDP header
+        if(header->caplen < sizeof(EthernetHeader) + ip_header_length + sizeof(UdpHeader))
+        {
+            return;
+        }
+        const UdpHeader* udp_header = reinterpret_cast<const UdpHeader*>(transport);
+        src_port = ntohs(udp_header->source_port);
+        dst_port = ntohs(udp_header->destination_port);
+    }
+    std::string src_hostname = resolve_hostname(src_ip);
+
+    std::cout << (int)protocol << " | " << src_ip << " | " << src_port << " | " << src_hostname; 
+}
 volatile bool isRunning = true;
 std::unordered_map<std::string, std::string> dnsCache;
+
+/*
+    BOOL - windows specific type from windows.h.Differs from bool because it is designed for C (needed because windows expects it)
+    WINAPI - calling convention that tells compiler how to call function at low level
+    DWORD - windows specific type for 32-bit unsigned integer
+*/
 BOOL WINAPI ctrl_c_event(DWORD event)
     {
         if (event == CTRL_C_EVENT || event == CTRL_BREAK_EVENT)
@@ -65,10 +191,57 @@ BOOL WINAPI ctrl_c_event(DWORD event)
         return FALSE;
     }
 
-std::string ip_to_string(std::string ip)
+/*
+    in_addr - creates an in_addr struct specifically designed to hold IPv4 addresses
+    [INET_ADDRSTRLEN] - constant = 16 (max length of IPv4 Address)
+    AF_INET - constant for IPV4 address family
+    char buf[INET_ADDRSTRLEN] - creates a character buffer to 
+    buf - character array to hold string representation of IP address
+    inet_ntop() - converts raw IP address to human-readable string format (needs input to be pointer to in_addr struct, outputs C string)
+*/
+std::string ip_to_string(uint32_t raw_ip)
 {
+    in_addr ip_address;
+    ip_address.s_addr = raw_ip;
+    char buf[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &ip_address, buf, INET_ADDRSTRLEN);
 
+    return std::string(buf);
 }
+
+/*
+    sockaddr_in - struct from winsock2 for holding IP address and port (stands for socket address internet)
+    sin_family - address family (stands for socket internet family)
+    sin_addr - struct for holding IP address (stands for socket internet address)
+    c_str() - method that returns pointer to a C string from a C++ string
+    NI_MAXHOST — constant for the max hostname buffer size = 1025
+    getnameinfo() — reverse DNS lookup
+*/
+std::string resolve_hostname(const std::string& ip_address)
+{   
+    if (dnsCache.find(ip_address) != dnsCache.end())
+    {
+        return dnsCache[ip_address];
+    }
+
+    sockaddr_in address;
+    address.sin_family = AF_INET;
+    inet_pton(AF_INET, ip_address.c_str(), &address.sin_addr);
+    char buf[NI_MAXHOST];
+
+    if (getnameinfo((sockaddr*)&address, sizeof(sockaddr_in), buf, NI_MAXHOST, nullptr, 0, NI_NAMEREQD) == 0)
+    {
+        dnsCache[ip_address] = std::string(buf);
+        
+    }
+    else
+    {
+        dnsCache[ip_address] = "";
+    }
+
+    return dnsCache[ip_address];
+}
+
 
 int main()
 {   
