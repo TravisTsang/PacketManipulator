@@ -1,67 +1,12 @@
 #include "winsock2.h"
-/*
-    WSAStartup() - initializes Winsock
-    WSACleanup() - cleans up Winsock
-    ntohs() - converts 16-bit value from network to host byte order
-    ntohl() - converts 32-bit value from network to host byte order
-    inet_ntop() - converts raw IP to readable string
-    inet_pton() - converts readable string to raw IP
-    sockaddr_in - struct for holding an IPv4 address
-    WSADATA - struct required by WSAStartup
-*/
-
 #include "ws2tcpip.h"
-/*
-    NI_NAMEREQD — flag that tells getnameinfo to only return a hostname, not fall back to the IP
-*/
 #include "windows.h"
-/*
-    SetConsoleCtrlHandler() - Windows function that registers a handler for console events (Ctrl+C)
-    DWORD - Windows type for 32-bit unsigned integer
-    WINAPI - Calling convention that tells the compiler how the function should be called at a low level
-    CTRL_C_EVENT, CTRL_BREAK_EVENT - constants for the Ctrl+C handler
-*/
 #include "pcap.h"
-/*
-    pcap_findalldevs() — lists all network interfaces
-    pcap_freealldevs() — frees the interface list
-    pcap_open_live() — opens an interface for capturing
-    pcap_compile() — compiles a BPF filter string
-    pcap_setfilter() — applies the compiled filter
-    pcap_next_ex() — gets the next packet
-    pcap_close() — closes the capture handle
-    pcap_geterr() — returns error message string
-    pcap_stats() — returns packet capture statistics
-    pcap_freecode() — frees a compiled filter
-    pcap_lookupnet() — gets the network address/mask for an interface
-    pcap_if_t — struct representing a network interface
-    pcap_pkthdr — struct containing packet metadata (length, timestamp)
-    pcap_t — the capture handle type
-    bpf_program — struct for holding a compiled filter
-    PCAP_ERRBUF_SIZE — constant for the error buffer size
-    PCAP_ERROR — error return code constant
-    u_char — unsigned char type used for raw packet data
-*/
-
 #include <iostream>
 #include <iomanip>
 #include <string>
 #include <unordered_map>
-#include <chrono>
-#include <ctime>
-#include <cstring>
 
-/*
-    uint8_t - unsigned 8-bit integer data type (used for raw packet data and MAC addresses)
-    uint16_t - unsigned 16-bit integer data type (used for protocol types and port numbers)
-    uint32_t - unsigned 32-bit integer data type (used for raw IP addresses and port numbers)
-    destination[6] - array to hold destination MAC address (6 bytes for MAC address)
-    source[6] - array to hold source MAC address (6 bytes for MAC address)
-    type - field to hold the Ethernet type (e.g., 0x0800 for IPv4)
-    #pragma pack(push, 1) - tells the compiler to save current pad settings and use 1-byte alignment (add no padding at all). Used to match exact layout of network packet headers
-    #pragma pack(pop) - restores previous packing settings
-    #pragma pack(push, 1)
-*/
 struct EthernetHeader
 { 
         uint8_t destination[6];
@@ -212,10 +157,13 @@ std::string ip_to_string(uint32_t raw_ip)
 /*
     sockaddr_in - struct from winsock2 for holding IP address and port (stands for socket address internet)
     sin_family - address family (stands for socket internet family)
+    inet_pton() - converts readable string to raw IP
     sin_addr - struct for holding IP address (stands for socket internet address)
+    NI_NAMEREQD — flag that tells getnameinfo to only return a hostname, not fall back to the IP
     c_str() - method that returns pointer to a C string from a C++ string
     NI_MAXHOST — constant for the max hostname buffer size = 1025
     getnameinfo() — reverse DNS lookup
+
 */
 std::string resolve_hostname(const std::string& ip_address)
 {   
@@ -226,6 +174,7 @@ std::string resolve_hostname(const std::string& ip_address)
 
     sockaddr_in address;
     address.sin_family = AF_INET;
+    
     inet_pton(AF_INET, ip_address.c_str(), &address.sin_addr);
     char buf[NI_MAXHOST];
 
@@ -245,8 +194,67 @@ std::string resolve_hostname(const std::string& ip_address)
 
 int main()
 {   
+    //WSADATA - struct required by WSAStartup
+    WSAData wsa_data;
+
+    //Initializes Winsock
+    WSAStartup(MAKEWORD(2, 2), &wsa_data);
     SetConsoleCtrlHandler(ctrl_c_event, TRUE);
 
- 
+    //PCAP_ERRBUF_SIZE — constant for the error buffer size
+    char error_buffer[PCAP_ERRBUF_SIZE];
+
+    //pcap_if_t — struct that represents network interface
+    pcap_if_t* all_interfaces = nullptr;
+    
+    //pcap_findalldevs() — lists all network interfaces
+    if(pcap_findalldevs(&all_interfaces, error_buffer) == -1 || all_interfaces == nullptr)
+    {
+        std::cerr << "Error finding interfaces: " << error_buffer << "\n";
+        return 1;
+    }
+
+    //pcap_t — capture handle type
+    pcap_t* handle = nullptr;
+    int snaplen = 65536; //max bytes to capture per packet
+    //pcap_open_live() — opens an interface for capturing
+    handle = pcap_open_live(all_interfaces->name, snaplen, 0, 1000, error_buffer);
+    if(handle == nullptr)
+    {
+        std::cerr << "Error opening interface: " << error_buffer << "\n";
+        return 1;
+    }
+
+    //bpf_program — struct for holding a compiled filter
+    bpf_program filter;
+
+    //pcap_compile() — compiles a BPF filter string
+    pcap_compile(handle, &filter, "ip", 1, PCAP_NETMASK_UNKNOWN);
+
+    //pcap_setfilter() — applies the compiled filter
+    pcap_setfilter(handle, &filter);
+
+    pcap_pkthdr* packet_header = nullptr;
+    const u_char* packet_data = nullptr;
+    while(isRunning)
+    {
+        //pcap_next_ex() — gets the next packet
+        if(pcap_next_ex(handle, &packet_header, &packet_data) == 1)
+        {
+            packet_handler(nullptr, packet_header, packet_data);
+        }
+    }
+
+    //pcap_freecode() — frees a compiled filter
+    pcap_freecode(&filter);
+
+    //pcap_close() — closes the capture handle
+    pcap_close(handle);
+
+    //pcap_freealldevs() — frees the interface list
+    pcap_freealldevs(all_interfaces);
+
+    //Cleans up Winsock
+    WSACleanup();
     return 0;
 }
