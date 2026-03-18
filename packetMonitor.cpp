@@ -59,7 +59,10 @@ struct UdpHeader
 volatile bool is_running = true;
 std::unordered_map<std::string, std::string> dns_cache;
 std::unordered_set<std::string> blocked_ips;
-std::unordered_set<std::string> blocked_hostnames;
+std::unordered_set<std::string> blocked_hostnames
+{
+    "youtube.com"
+};
 
 /*
     BOOL - windows specific type from windows.h.Differs from bool because it is designed for C (needed because windows expects it)
@@ -70,7 +73,7 @@ BOOL WINAPI ctrl_c_event(DWORD event)
     {
         if (event == CTRL_C_EVENT || event == CTRL_BREAK_EVENT)
         {
-            isRunning = false;
+            is_running = false;
             std::cout << "Stopping Program" << std::endl;
             std::cout.flush();
 
@@ -123,7 +126,7 @@ std::string resolve_hostname(const std::string& ip_address)
     if (getnameinfo((sockaddr*)&address, sizeof(sockaddr_in), buf, NI_MAXHOST, nullptr, 0, 0) == 0)
         dns_cache[ip_address] = std::string(buf);
     else
-        dns_cache[ip_address] = ip_address; // fall back to IP
+        dns_cache[ip_address] = ip_address; //fall back to IP
 
     return dns_cache[ip_address];
 }
@@ -154,7 +157,7 @@ void packet_handler(u_char* user, const struct pcap_pkthdr* header, const u_char
     std::string src_ip = ip_to_string(ip_header->source_ip); 
     std::string dest_ip = ip_to_string(ip_header->destination_ip);
 
-    // If IP already blocked, discard immediately
+    //If IP already blocked, discard immediately
     if (blocked_ips.count(src_ip))
     {
         return;
@@ -237,7 +240,7 @@ int main()
         return 1;
     }
     
-    // Print all interfaces
+    //Print all interfaces
     pcap_if_t* dev = all_interfaces;
     int i = 0;
     while (dev)
