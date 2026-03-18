@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 #pragma pack(push, 1) //Ensures that the structs are packed without padding (matches the actual packet structure)
 struct EthernetHeader
@@ -55,8 +56,10 @@ struct UdpHeader
 };
 #pragma pack(pop)
 
-volatile bool isRunning = true;
-std::unordered_map<std::string, std::string> dnsCache;
+volatile bool is_running = true;
+std::unordered_map<std::string, std::string> dns_cache;
+std::unordered_set<std::string> blocked_ips;
+std::unordered_set<std::string> blocked_hostnames;
 
 /*
     BOOL - windows specific type from windows.h.Differs from bool because it is designed for C (needed because windows expects it)
@@ -107,8 +110,8 @@ std::string ip_to_string(uint32_t raw_ip)
 */
 std::string resolve_hostname(const std::string& ip_address)
 {
-    auto it = dnsCache.find(ip_address);
-    if (it != dnsCache.end())
+    auto it = dns_cache.find(ip_address);
+    if (it != dns_cache.end())
         return it->second;
 
     sockaddr_in address{};
@@ -118,11 +121,11 @@ std::string resolve_hostname(const std::string& ip_address)
     char buf[NI_MAXHOST];
 
     if (getnameinfo((sockaddr*)&address, sizeof(sockaddr_in), buf, NI_MAXHOST, nullptr, 0, 0) == 0)
-        dnsCache[ip_address] = std::string(buf);
+        dns_cache[ip_address] = std::string(buf);
     else
-        dnsCache[ip_address] = ip_address; // fall back to IP
+        dns_cache[ip_address] = ip_address; // fall back to IP
 
-    return dnsCache[ip_address];
+    return dns_cache[ip_address];
 }
 /*
     u_char* user - pointer to unsigned char (used for raw packet data and parameters in the packet handler function)
@@ -150,6 +153,24 @@ void packet_handler(u_char* user, const struct pcap_pkthdr* header, const u_char
     //Extracts source and destination IP addresses from the IP header and converts them to readable strings
     std::string src_ip = ip_to_string(ip_header->source_ip); 
     std::string dest_ip = ip_to_string(ip_header->destination_ip);
+
+    // If IP already blocked, discard immediately
+    if (blocked_ips.count(src_ip))
+    {
+        return;
+    }
+
+    std::string src_hostname = resolve_hostname(src_ip);
+
+    for (const std::string& keyword : blocked_hostnames)
+    {
+        if (src_hostname.find(keyword) != std::string::npos)
+        {
+            std::cout << "Blocking " << src_ip << " (" << src_hostname << ") - matched: " << keyword << "\n";
+            blocked_ips.insert(src_ip);
+            return;
+        }
+    }
 
     //Extracts the protocol number (TCP, UDP, etc) from the IP header
     uint8_t protocol = ip_header->protocol; 
@@ -184,7 +205,6 @@ void packet_handler(u_char* user, const struct pcap_pkthdr* header, const u_char
         src_port = ntohs(udp_header->source_port);
         dst_port = ntohs(udp_header->destination_port);
     }
-    std::string src_hostname = resolve_hostname(src_ip);
 
     std::cout << (int)protocol << " | " << src_ip << " | " << src_port << " | " << src_hostname << std::endl; 
     std::cout.flush();
@@ -267,7 +287,7 @@ int main()
 
     std::cout << "Starting Packet Capture:\n";
     int packet_count = 0;
-    while(isRunning)
+    while(is_running)
     {
         //pcap_next_ex() — gets the next packet
         if(pcap_next_ex(handle, &packet_header, &packet_data) == 1)
