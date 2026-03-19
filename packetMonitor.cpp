@@ -2,6 +2,7 @@
 #include <ws2tcpip.h>
 #include <windows.h>
 #include <pcap/pcap.h>
+#include <fwpmu.h>
 #include <iostream>
 #include <iomanip>
 #include <string>
@@ -59,11 +60,19 @@ struct UdpHeader
 volatile bool is_running = true;
 std::unordered_map<std::string, std::string> dns_cache;
 std::unordered_set<std::string> blocked_ips;
-std::unordered_set<std::string> blocked_hostnames
+std::unordered_set<std::string> blocked_hostnames =
 {
-    "youtube.com"
+    "youtube.com",
+    "googlevideo.com",
+    "gvt1.com",
+    "1e100.net",
+    "dns.google"
 };
 
+HANDLE wfp_engine = nullptr;
+static const GUID FWPM_CONDITION_IP_REMOTE_ADDRESS = {0x4cd62a49, 0x59c3, 0x4969, {0xb7, 0xf3, 0xbd, 0xa5, 0xd3, 0x28, 0x90, 0xa4}};
+static const GUID FWPM_LAYER_ALE_AUTH_CONNECT_V4 = {0xc38d57d1, 0x05a7, 0x4c33, {0x90, 0x4f, 0x7f, 0xbc, 0xee, 0xe6, 0x0e, 0x82}};
+#define FWPM_SESSION_FLAG_DYNAMIC 0x00000001
 /*
     BOOL - windows specific type from windows.h.Differs from bool because it is designed for C (needed because windows expects it)
     WINAPI - calling convention that tells compiler how to call function at low level
@@ -130,6 +139,35 @@ std::string resolve_hostname(const std::string& ip_address)
 
     return dns_cache[ip_address];
 }
+
+void block_ip(const std::string& ip_str)
+{
+    FWPM_FILTER0 filter = {};
+    FWPM_FILTER_CONDITION0 condition = {};
+    FWP_V4_ADDR_AND_MASK_ address = {};
+
+    IN_ADDR address_in;
+    inet_pton(AF_INET, ip_str.c_str(), &address_in);
+    address.addr = ntohl(address_in.s_addr);
+    address.mask = 0xFFFFFFFF;
+
+    condition.fieldKey = FWPM_CONDITION_IP_REMOTE_ADDRESS;;
+    condition.matchType = FWP_MATCH_EQUAL;
+    condition.conditionValue.type = FWP_V4_ADDR_MASK;
+    condition.conditionValue.v4AddrMask = &address;
+
+    filter.layerKey = FWPM_LAYER_ALE_AUTH_CONNECT_V4;
+    filter.action.type = FWP_ACTION_BLOCK;
+    filter.filterCondition = &condition;
+    filter.numFilterConditions = 1;
+    filter.weight.type = FWP_EMPTY;
+    filter.displayData.name = const_cast<wchar_t*>(L"Packet Monitor Block");
+
+    UINT64 filter_id = 0;
+    FwpmFilterAdd0(wfp_engine, &filter, nullptr, &filter_id);
+    std::cout << "Blocking IP: " << ip_str << "\n";
+}
+
 /*
     u_char* user - pointer to unsigned char (used for raw packet data and parameters in the packet handler function)
     const struct pcap_pkthdr* header - pointer to a struct containing packet metadata (length, timestamp)
@@ -157,11 +195,10 @@ void packet_handler(u_char* user, const struct pcap_pkthdr* header, const u_char
     std::string src_ip = ip_to_string(ip_header->source_ip); 
     std::string dest_ip = ip_to_string(ip_header->destination_ip);
 
-    //If IP already blocked, discard immediately
     if (blocked_ips.count(src_ip))
-    {
-        return;
-    }
+        {
+            return;
+        }
 
     std::string src_hostname = resolve_hostname(src_ip);
 
@@ -169,8 +206,8 @@ void packet_handler(u_char* user, const struct pcap_pkthdr* header, const u_char
     {
         if (src_hostname.find(keyword) != std::string::npos)
         {
-            std::cout << "Blocking " << src_ip << " (" << src_hostname << ") - matched: " << keyword << "\n";
             blocked_ips.insert(src_ip);
+            block_ip(src_ip);
             return;
         }
     }
@@ -213,11 +250,23 @@ void packet_handler(u_char* user, const struct pcap_pkthdr* header, const u_char
     std::cout.flush();
 }
 
+/*
+    FWPM_FILTER0 - struct that defines a WFP filter rule (what to match and what action to take)
+    FWPM_FILTER_CONDITION0 - struct that defines a single condition the filter checks against (e.g. IP address)
+    FWP_V4_ADDR_AND_MASK - struct that holds an IPv4 address and a subnet mask for matching
+    addr.mask = 0xFFFFFFFF - all bits set means exact IP match (as opposed to matching a subnet range)
+*/
+
+
 int main()
 {   
     std::cout << "Program Start:\n";
     //WSADATA - struct required by WSAStartup
     WSAData wsa_data;
+
+    FWPM_SESSION0 session = {};
+    session.flags = FWPM_SESSION_FLAG_DYNAMIC;
+    FwpmEngineOpen0(nullptr, RPC_C_AUTHN_WINNT, nullptr, &session, &wfp_engine);
 
     //Initializes Winsock
     std::cout << "Initializing Winsock:\n";
@@ -315,5 +364,7 @@ int main()
     //Cleans up Winsock
     std::cout << "Cleaning up Winsock:\n";
     WSACleanup();
+
+    FwpmEngineClose0(wfp_engine);
     return 0;
 }
