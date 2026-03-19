@@ -1,3 +1,11 @@
+/*
+PROGRAM STRUCTURE:
+    1. Capture every packet passing through
+    2. Extract source IP from each packet
+    3. Do reverse DNS lookup on source IP (IP → hostname)
+    4. If hostname matches blocked keyword, add IP to WFP firewall block list
+*/
+
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>

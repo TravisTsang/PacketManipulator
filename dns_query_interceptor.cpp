@@ -1,3 +1,18 @@
+/*
+PROGRAM STRUCTURE:
+    1. Open network interface with pcap
+    2. Capture every packet passing through
+    3. If packet is UDP from port 53 (DNS response):
+        - parse domain name and resolved IP from packet
+        - if domain matches blocklist:
+            - add resolved IP to blocked list
+            - call WFP to block that IP at kernel level
+    4. If packet is from already blocked IP:
+        - discard immediately
+
+Problem: Modern browsers use DNS over HTTPS (DoH), which encrypts DNS queries, making it impossible to read domain names without decryption
+*/
+
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
