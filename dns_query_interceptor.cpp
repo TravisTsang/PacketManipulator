@@ -10,8 +10,10 @@ PROGRAM STRUCTURE:
     4. If packet is from already blocked IP:
         - discard immediately
 
-Problem: Modern browsers use DNS over HTTPS (DoH), which encrypts DNS queries, making it impossible to read domain names without decryption
-*/
+Problems: 
+    - Modern browsers use DNS over HTTPS (DoH), which encrypts DNS queries, making it impossible to read domain names without decryption
+    - If website is already visited before program started, the IP is already in windows DNS cache, so no DNS query is made and nothing will happen
+    */
 
 #include <winsock2.h>
 #include <ws2tcpip.h>

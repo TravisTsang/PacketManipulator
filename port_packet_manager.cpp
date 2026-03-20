@@ -4,6 +4,8 @@ PROGRAM STRUCTURE:
     2. Extract source IP from each packet
     3. Do reverse DNS lookup on source IP (IP → hostname)
     4. If hostname matches blocked keyword, add IP to WFP firewall block list
+
+Problem: Many packets Eg. Youtube don't resolve back to youtube.com; blocking those IPs would cause overblocking and prevent other websites/services from being accessed
 */
 
 #include <winsock2.h>

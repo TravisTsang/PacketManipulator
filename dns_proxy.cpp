@@ -4,6 +4,10 @@
     2. Browser sends all requests to this DNS server first
     3. If request is not for blocked domain, let it pass
     4. If request is for blocked domain, send NXDOMAIN response
+
+    PROBLEM:
+    - Program can't detect DNS names because they are encrypted by DoH
+    - DNS packets aren't even sent to program, as most DNS queries are resolved by dedicated DoH servers browsers automatically use
 */
 
 #include <winsock2.h>
